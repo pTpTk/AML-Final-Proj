@@ -1,8 +1,8 @@
-⚽ **Club Football Match Data (2000 - 2025)**
+⚽ **Club Football Match Data**
 
-This dataset offers a simple entrance to the world of football match data analysis. It offers football match data from 27 countries and 42 leagues worldwide, including some of the best leagues such as the English Premier League, German Bundesliga, and Spanish La Liga. The data spans from the 2000/01 season to the most recent results from the 2024/25 season. The dataset also includes Elo Ratings for the given time period with snapshots of ~500 of the best teams in Europe taken twice a month, on the 1st and 15th.
+This dataset offers a simple entrance to the world of football match data analysis. It contains 238,858 football match records across 38 league/division codes, including competitions such as the English Premier League, German Bundesliga, and Spanish La Liga. The match data spans from the 2000/01 season through 3 September 2026, including the complete 2025/26 season and the opening rounds of 2026/27.
 
-Match results and statistics provided in the table are taken from [Football-Data.co.uk](https://www.football-data.co.uk/). Elo data are taken from [ClubElo](https://www.clubelo.com/).
+Match results and statistics are sourced from [Football-Data.co.uk](https://www.football-data.co.uk/). Elo data through 1 June 2025 are sourced from [ClubElo](https://www.clubelo.com/). The later Elo snapshots and match-level Elo values are a provisional continuation calculated from the last ClubElo snapshot because the ClubElo API was unavailable during the September 2026 update.
 
 ---
 
@@ -12,9 +12,9 @@ Match results and statistics provided in the table are taken from [Football-Data
 
 🔗 **Files type**: .csv
 
-⌨️ **Total rows**: ~475 000 as of 07/2025
+⌨️ **Rows**: 238,858 matches and 273,972 Elo records as of 09/2026
 
-💾 **Total size**: ~51MB as of 07/2025
+💾 **Total size**: approximately 57 MB as of 09/2026
 
 
 The dataset is a great starting point for football match prediction, both pre-match and in-play, with huge potential lying in the amount of data and their accuracy. The dataset contains information about teams' strength and form prior to the match, as well as general market predictions via pre-match odds.
@@ -25,11 +25,11 @@ The dataset is a great starting point for football match prediction, both pre-ma
 
 ## 🔑 KEY FEATURES
 
-1️⃣ **SIZE** - This is the biggest open and free dataset on the internet, keeping uniform information about tens of thousands of football matches, including match statistics, odds, and Elo and form information.
+1️⃣ **SIZE** - This is a large open dataset containing uniform information about hundreds of thousands of football matches, including match statistics, odds, form information, and Elo ratings.
 
 2️⃣ **READABILITY** - The whole dataset is tabular, and all of the data are clear to navigate and explain. Both tables in the dataset correspond to each other via remapped club names, and all of the formats within the table (such as odds) are uniform.
 
-3️⃣ **RECENCY** - This is the most up-to-date open football dataset, containing data from matches as recent as July 2025. The plan is to update this dataset monthly or bi-monthly via a custom-made Python pipeline.
+3️⃣ **RECENCY** - The latest match is dated 3 September 2026. The dataset currently contains the complete 2025/26 season and the first few rounds of 2026/27; future updates will be added periodically.
 
 ---
 
@@ -37,18 +37,18 @@ The dataset is a great starting point for football match prediction, both pre-ma
 
 ### 💪 TABLE 1 - ELO RATINGS.csv
 
-This table is a collection of Elo ratings taken from [ClubElo](http://www.clubelo.com/). Snapshots are taken twice a month, on the 1st and 15th day of the month, saving the whole Club Elo database. Some clubs' names are remapped to correspond with the **Matches** table (*for example "Bayern" to "Bayern Munich"*).``
+This table contains historical Elo snapshots. Records through 1 June 2025 come from [ClubElo](https://www.clubelo.com/). The additional snapshots from 15 June 2025 onward are a provisional continuation generated from the last ClubElo snapshot using the new match results. Snapshots are kept on the 1st and 15th day of the month, and some club names are remapped to correspond with the **Matches** table (*for example, "Bayern" to "Bayern Munich").
 
 |Column | Data Type | Description |
 | --- | --- |---|
-| **📅 `Date`**| *date*|Date of the snapshot. |
-| **🛡️ `Club`**| *string* |Club name in English corresponding to Matches table. |
-| **🌍️ `Country`**| *enum* |Club country three-letter code. |
-| **📈 `Elo`**| *float* |Club's current Elo rating, rounded to two decimal spots. |
+| **📅 `date`**| *date*|Date of the snapshot. |
+| **🛡️ `club`**| *string* |Club name in English corresponding to the Matches table. |
+| **🌍️ `country`**| *enum* |Club country three-letter code. |
+| **📈 `elo`**| *float* |Club's Elo rating, rounded to two decimal places. |
 
 ### 💪 TABLE 2 - MATCHES.csv
 
-This table is a collection of historical match results and statistics taken from [Football-Data.co.uk](https://www.football-data.co.uk). The data are ordered by date, starting from 28th July (the beginning of the 2000/01 season) up until 23rd December 2024 (the 2024/25 season). The table contains the most important information about both teams and about the match itself. The table is highly incomplete due to the differences in statistics provided by each league. However, it is possible to create smaller sub-tables or clean this one to remove null values. As of January 2025, the table contains about 226,000 unique match records.
+This table is a collection of historical match results and statistics taken from [Football-Data.co.uk](https://www.football-data.co.uk). The data are ordered by date, starting from 28 July 2000 and continuing through 3 September 2026. The table contains the most important information about both teams and about the match itself. It is intentionally incomplete in places because the statistics available differ by league and season; users can create smaller sub-tables or remove null values for specific analyses. The table currently contains 238,858 match records.
 
 |Column | Data Type | Description |
 | --- | --- |---|
@@ -100,6 +100,8 @@ This table is a collection of historical match results and statistics taken from
 | **📦 `C_VAD`**| *float* |Likeliness of match falling into the Visibly Away Dominated match cluster. |
 | **📦 `C_HTB`**| *float* |Likeliness of match falling into the High Tempo Balanced match cluster. |
 | **📦 `C_PHB`**| *float* |Likeliness of match falling into the Highly Physical Balanced match cluster. |
+
+The six cluster-probability columns are blank for the latest 8,301 appended match rows. They will be recalculated after the clustering model and feature definitions are reviewed.
 
 ---
 
@@ -199,14 +201,14 @@ Derived features are computed quickly on-the-go and that's why they are not incl
 
 ---
 
-## ✒️ CITING THIS REPOSITROY
+## ✒️ CITING THIS REPOSITORY
 
 If you use this repository or its contents, please use the following information to cite it.
 
 **Author:** Adam Gábor  
 **ORCID:** https://orcid.org/0009-0001-9252-5976  
 **Affiliation:** Faculty of Informatics and Information Technologies, Slovak University of Technology in Bratislava  
-**Year:** 2025
+**Year:** 2026
 
 **Example citation:**
-Gábor, A. (2025). Club Football Match Data. Retrieved from https://github.com/xgabora/Club-Football-Match-Data-2000-2025/.
+Gábor, A. (2026). Club Football Match Data. Retrieved from https://github.com/xgabora/Club-Football-Match-Data/.
