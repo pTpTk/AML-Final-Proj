@@ -1,8 +1,8 @@
-⚽ **Club Football Match Data**
+# ⚽ **Club Football Match Data**
 
 This dataset offers a simple entrance to the world of football match data analysis. It contains 238,858 football match records across 38 league/division codes, including competitions such as the English Premier League, German Bundesliga, and Spanish La Liga. The match data spans from the 2000/01 season through 3 September 2026, including the complete 2025/26 season and the opening rounds of 2026/27.
 
-Match results and statistics are sourced from [Football-Data.co.uk](https://www.football-data.co.uk/). Elo data through 1 June 2025 are sourced from [ClubElo](https://www.clubelo.com/). The later Elo snapshots and match-level Elo values are a provisional continuation calculated from the last ClubElo snapshot because the ClubElo API was unavailable during the September 2026 update.
+Match results and statistics are sourced from [Football-Data.co.uk](https://www.football-data.co.uk/). Elo data are sourced from [ClubElo](https://www.clubelo.com/).
 
 ---
 
