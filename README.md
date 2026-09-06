@@ -4,6 +4,8 @@ This dataset offers a simple entrance to the world of football match data analys
 
 Match results and statistics are sourced from [Football-Data.co.uk](https://www.football-data.co.uk/). Elo data are sourced from [ClubElo](https://www.clubelo.com/).
 
+**If you want to work with more data, visit [odds.adamgabor.eu](https://odds.adamgabor.eu/) to browse the available datasets of football odds including World Cup 2026, Champions League 2026/27 and women's football leagues.**
+
 ---
 
 ## 📅 **DATASET OVERVIEW**
@@ -212,3 +214,9 @@ If you use this repository or its contents, please use the following information
 
 **Example citation:**
 Gábor, A. (2026). Club Football Match Data. Retrieved from https://github.com/xgabora/Club-Football-Match-Data/.
+
+## ➗ GETTING MORE FOOTBALL DATA - ODDS FROM 45 LEAGUES
+
+Looking for clean and ready-to-use historical football bookmaker odds in JSON? The packs include World Cup 2026 odds and a larger European football collection covering markets such as 1X2, double chance, goals, handicaps, correct scores, corners, half-time markets and more, perfectly suitable for machine learning, model testing and market analysis.
+
+Visit [odds.adamgabor.eu](https://odds.adamgabor.eu/) to browse the available datasets.
