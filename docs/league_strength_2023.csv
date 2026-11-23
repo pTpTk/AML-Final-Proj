@@ -1,0 +1,22 @@
+Division,Country,League,UEFARank2023,Coefficient2023,Tier
+E0,England,Premier League,1,109.570,Top
+SP1,Spain,La Liga,2,92.998,Top
+D1,Germany,Bundesliga,3,82.481,Top
+I1,Italy,Serie A,4,81.926,Top
+F1,France,Ligue 1,5,61.164,Top
+N1,Netherlands,Eredivisie,6,59.900,Mid
+P1,Portugal,Primeira Liga,7,56.216,Mid
+B1,Belgium,Pro League,8,42.200,Mid
+SC0,Scotland,Premiership,9,36.400,Mid
+AUT,Austria,Bundesliga,10,34.000,Mid
+T1,Türkiye,Super Lig,12,32.100,Unselected
+SUI,Switzerland,Super League,13,31.675,Unselected
+NOR,Norway,Eliteserien,16,29.000,Unselected
+DEN,Denmark,Superliga,17,27.825,Unselected
+RUS,Russia,Premier League,18,26.215,Unselected
+G1,Greece,Super League,20,25.225,Unselected
+SWE,Sweden,Allsvenskan,23,23.750,Lower
+POL,Poland,Ekstraklasa,24,20.750,Lower
+ROM,Romania,Liga I,26,20.500,Lower
+IRL,Ireland,Premier Division,36,10.375,Lower
+FIN,Finland,Veikkausliiga,37,10.250,Lower
