@@ -1,13 +1,21 @@
+from importlib import import_module
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from src.evaluation import (
-    LEAGUE_PATH, MODEL_NAMES, TIERS, common_end_date, prediction_scores,
-    select_matches, summarize_predictions,
-)
-from src.models import LABELS
+
+_step_01 = import_module('01_clean_data')
+LABELS = _step_01.LABELS
+
+_step_04 = import_module('04_evaluate_leagues')
+LEAGUE_PATH = _step_04.LEAGUE_PATH
+MODEL_NAMES = _step_04.MODEL_NAMES
+TIERS = _step_04.TIERS
+common_end_date = _step_04.common_end_date
+prediction_scores = _step_04.prediction_scores
+select_matches = _step_04.select_matches
+summarize_predictions = _step_04.summarize_predictions
 
 
 class TierEvaluationTests(unittest.TestCase):

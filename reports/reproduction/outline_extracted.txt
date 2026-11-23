@@ -1,0 +1,85 @@
+PAGE 1
+1. Match Predictability across Leagues  
+We aim to evaluate what sets the top football leagues apart from the rest, and also to 
+separate among the top leagues (e.g. Premier vs. rest). One theory is that a league is more 
+exciting if the match results are less predictable. We perform the following analysis:  
+1. Plan: 
+Train classification models to predict the outcome of matches for selected leagues 
+across different tiers, and see how accurate the predictions are. We train the 
+models with match statistics of all matches from 2000/01 season to 2022/23, then 
+try to predict the outcomes of games in each league from season 2023/24 to 
+2025/26 . 
+ 
+We used naive Bayes classification, logistic regression and histogram gradient 
+boosting for our analysis.  
+ 
+Results: 
+League Naive Bayes Logistic Regression Boosting 
+Premier League (E0) 55.4%  55.4%  56.5%  
+La Liga (SP1)  54.4%  55.0%  53.1%  
+Bundesliga (D1)  51.7%  52.9%  52.2%  
+Serie A (I1) 52.9%  52.9%  52.9%  
+Ligue 1 (F1) 47.8%  49.2%  48.0%  
+ 
+The Premier League is even slightly more predictable compared to other top tier 
+football leagues. Therefore predictability does not contribute to the popularity of the 
+Premier League. 
+ 
+We further evaluated the predictability of games in less popular leagues. We picked 
+15 leagues and grouped them into 3 tiers. The top tier includes Premier League (E0), 
+La Liga (SP1), Bundesliga (D1), Serie A (I1) and Ligue 1 (F1), which were ranked 1-5 
+by UEFA in 2023 . The mid tier includes Eredivisie (N1), Primeira Liga (P1), Pro League 
+(B1), Premiership (SC0) and Bundesliga (AUT), which were the 6-10 th in the same 
+UEFA ranking. The lower tier includes Allsvenskan (SWE), Ekstraklasa (POL), Liga I 
+(ROM), Premier Division (IRL) and Veikkausliiga (FIN), which were ranked 20+ 
+according to UEFA. 
+ 
+
+PAGE 2
+Tier Naive Bayes Logistic 
+Regression 
+Boosting 
+Top 52.7% 53.2%  52.8%  
+Mid 52.2% 54.4%  54.9%  
+Low 44.1% 45.4%  45.1%  
+ 
+One interesting discovery is that the low tier games are significantly less predictable 
+compared to the top and mid tier games. 
+ 
+2. Each football match can have three outcomes: win, draw or loss. Thus the models 
+are doing better than random guesses. However, the prediction accuracy was much 
+lower than our expectation. We therefore thought to compare the results with the 
+betting market rates and see which side better predicts match outcomes. 
+ 
+Tier Naive Bayes Logistic 
+Regression 
+Boosting Betting Market 
+Top 52.7% 53.2% 52.8%  56.0%  
+Mid 52.2% 54.4% 54.9%  55.7% 
+Low 44.1% 45.4% 45.1%  48.4%  
+ 
+The betting market odds show the same accuracy trend as our prediction models. 
+However, market predictions are more accurate than our models, by over 3 
+percentage points in some cases.  
+ 
+3. To improve the accuracy of our models, we trained another set of models with the 
+average betting odds of each game. For each game, we calculate the 
+home/draw/away odds as the rate over the sum of all three rates. During training, 
+we provide the following additional information:  
+Home/Away_PreviousX_MarketWin/Draw/LossProbability, where X is 1 -5, and the 
+win/draw/loss probability of the current match. 
+ 
+The prediction results are as listed 
+Tier Method Market Odd Old Model New Model 
+Top Naive Bayes 56.0%  52.7%  53.3%  
+Top Logistic  56.0%  53.2%  54.9%  
+Top Boosting 56.0%  52.8%  54.7%  
+Mid Naive Bayes 55.7%  52.2%  53.0%  
+Mid Logistic  55.7%  54.4%  55.7%  
+Mid Boosting 55.7%  54.9%  55.3%  
+
+PAGE 3
+Lower Naive Bayes 48.4%  44.1%  45.8%  
+Lower Logistic  48.4%  45.4%  49.5%  
+Lower Boosting 48.4%  45.1%  47.9%  
+ 

@@ -1,20 +1,25 @@
+from importlib import import_module
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from src.market_models import fit_same_architecture, select_train_and_test
-from src.models import make_model
+
+_step_03 = import_module('03_train_models')
+make_model = _step_03.make_model
+
+_step_07 = import_module('07_train_market_models')
+fit_same_architecture = _step_07.fit_same_architecture
+select_train_and_test = _step_07.select_train_and_test
 
 
 class MarketModelTrainingTests(unittest.TestCase):
-    def test_split_rejects_source_disagreements_and_requires_test_odds(self):
+    def test_split_requires_prepared_targets_and_valid_test_odds(self):
         table = pd.DataFrame({
             "Division": ["E0"] * 7,
             "MatchDate": pd.to_datetime(["2000-06-30", "2000-07-01", "2023-07-01",
                                          "2024-12-05", "2024-12-06", "2024-01-01", "2026-07-01"]),
-            "FTResult": ["H"] * 7,
-            "SourceResult": ["H", "H", "H", "H", "H", "A", "H"],
+            "FTResult": ["H", "H", "H", "H", "H", None, "H"],
             "MarketHome": [np.nan, np.nan, 2, 2, 2, 2, 2],
             "MarketDraw": [3] * 7, "MarketAway": [4] * 7,
         })

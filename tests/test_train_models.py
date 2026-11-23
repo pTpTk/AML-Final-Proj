@@ -1,10 +1,16 @@
+from importlib import import_module
 import unittest
 
+from threadpoolctl import threadpool_limits
 import numpy as np
 import pandas as pd
-from threadpoolctl import threadpool_limits
 
-from src.models import evaluate, make_model, season_labels, split_data
+
+_step_03 = import_module('03_train_models')
+evaluate = _step_03.evaluate
+make_model = _step_03.make_model
+season_labels = _step_03.season_labels
+split_data = _step_03.split_data
 
 
 class ModelTrainingTests(unittest.TestCase):

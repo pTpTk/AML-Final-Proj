@@ -1,15 +1,27 @@
-import hashlib
-import io
+from contextlib import redirect_stdout
+from importlib import import_module
 from pathlib import Path
+from unittest.mock import patch
+import hashlib
+import importlib.util
+import io
+import json
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
-from src import data_sources
-from src.data_quality import audit_raw, paired_test_mask, COUNT_COLUMNS, DETAIL_COLUMNS
+
+data_sources = import_module('00_download_sources')
+
+clean_data = import_module('01_clean_data')
+
+_step_08 = import_module('08_audit_data')
+COUNT_COLUMNS = _step_08.COUNT_COLUMNS
+DETAIL_COLUMNS = _step_08.DETAIL_COLUMNS
+audit_raw = _step_08.audit_raw
+paired_test_mask = _step_08.paired_test_mask
 
 
 class DataProvenanceTests(unittest.TestCase):
@@ -29,16 +41,16 @@ class DataProvenanceTests(unittest.TestCase):
         source = pd.DataFrame({"SourceDate": pd.to_datetime(["2022-02-01", "2022-02-02", "2022-02-03"]),
                                "SourceResult": ["H", "H", "A"], "MarketHome": [9.] * 3,
                                "MarketDraw": [9.] * 3, "MarketAway": [9.] * 3})
-        prepared = data_sources.prepare_matches(raw, source)
-        np.testing.assert_allclose(prepared.loc[0, data_sources.MARKET_COLUMNS].to_numpy(dtype=float), [2, 3, 4])
-        self.assertTrue(prepared.loc[1:, data_sources.MARKET_COLUMNS].isna().all().all())
+        prepared = clean_data.prepare_matches(raw, source)
+        np.testing.assert_allclose(prepared.loc[0, clean_data.MARKET_COLUMNS].to_numpy(dtype=float), [2, 3, 4])
+        self.assertTrue(prepared.loc[1:, clean_data.MARKET_COLUMNS].isna().all().all())
         self.assertTrue(pd.isna(prepared.loc[2, "FTResult"]))
         self.assertEqual(prepared.MatchDate.tolist(), source.SourceDate.tolist())
-        pd.testing.assert_frame_equal(raw[data_sources.RAW_COLUMNS], prepared[data_sources.RAW_COLUMNS])
+        pd.testing.assert_frame_equal(raw[clean_data.RAW_COLUMNS], prepared[clean_data.RAW_COLUMNS])
 
     def test_raw_only_preparation_needs_no_external_record(self):
         raw = self.games()
-        prepared = data_sources.prepare_matches(raw)
+        prepared = clean_data.prepare_matches(raw)
         self.assertNotIn("SourceResult", prepared)
         self.assertEqual(prepared.MatchDate.tolist(), pd.to_datetime(raw.MatchDate).tolist())
         self.assertEqual(prepared.FTResult.tolist(), raw.FTResult.tolist())
@@ -76,6 +88,27 @@ class DataProvenanceTests(unittest.TestCase):
                               "SourceDate": pd.to_datetime(["2023-04-07", "2023-07-04", "2023-08-01", "2023-08-01"]),
                               "FTResult": ["H"] * 4, "SourceResult": ["H", "H", "H", "A"]})
         self.assertEqual(paired_test_mask(table, pd.Timestamp("2024-10-06")).tolist(), [False, False, True, False])
+
+    def test_raw_only_audit_ignores_stale_external_files(self):
+        path = Path(__file__).resolve().parents[1] / "08_audit_data.py"
+        spec = importlib.util.spec_from_file_location("audit_step", path)
+        step = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(step)
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            raw_path = folder / "Matches.csv"
+            self.games().to_csv(raw_path, index=False)
+            (folder / "data_preparation.json").write_text(json.dumps({"Mode": "Raw only"}))
+            (folder / "data_cleaning_source_matches.csv").write_text("stale data; must not be read")
+            for name in ["data_quality_external.csv", "data_quality_external_by_league.csv"]:
+                (folder / name).write_text("outdated external results")
+            with patch.object(step, "RAW_PATH", raw_path), patch.object(step, "REPORT_DIR", folder), \
+                 patch.object(step, "build_report") as build, redirect_stdout(io.StringIO()):
+                step.main()
+            build.assert_called_once_with(report_dir=folder, include_sensitivity=False, allow_incomplete=True)
+            self.assertTrue((folder / "data_quality_summary.csv").exists())
+            self.assertFalse((folder / "data_quality_external.csv").exists())
+            self.assertFalse((folder / "data_quality_external_by_league.csv").exists())
 
 
 if __name__ == "__main__":

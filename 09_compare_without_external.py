@@ -1,24 +1,61 @@
 """Measure the effect of external date/result cleaning while holding supplied odds and model settings fixed."""
 
+from importlib import import_module
 import hashlib
 import json
 import time
 
+from threadpoolctl import threadpool_limits
 import joblib
 import numpy as np
 import pandas as pd
-from threadpoolctl import threadpool_limits
 
-from src.data_sources import RAW_PATH, MARKET_COLUMNS, prepare_matches
-from src.data_quality import valid_odds, paired_test_mask
-from src.evaluation import LEAGUE_PATH, TIERS, MODEL_NAMES, common_end_date, prediction_scores
-from src.features import load_match_history, market_features, MARKET_FIELD_PATH
-from src.market_models import fit_same_architecture, FEATURE_SETS, BENCHMARK
-from src.models import (DATA_PATH, FIELD_PATH, LABELS, MODEL_DIR, REPORT_DIR,
-                        TRAIN_START, TEST_START, TEST_END, evaluate)
-from src.odds_evaluation import add_odds_predictions
-from src.reporting import write_report
 
+build_report = import_module("tools.build_report").build_report
+
+_step_00 = import_module('00_download_sources')
+RAW_PATH = _step_00.RAW_PATH
+
+_step_01 = import_module('01_clean_data')
+LABELS = _step_01.LABELS
+MARKET_COLUMNS = _step_01.MARKET_COLUMNS
+REPORT_DIR = _step_01.REPORT_DIR
+prepare_matches = _step_01.prepare_matches
+
+_step_02 = import_module('02_build_features')
+load_match_history = _step_02.load_match_history
+
+_step_03 = import_module('03_train_models')
+DATA_PATH = _step_03.DATA_PATH
+FIELD_PATH = _step_03.FIELD_PATH
+MODEL_DIR = _step_03.MODEL_DIR
+TEST_END = _step_03.TEST_END
+TEST_START = _step_03.TEST_START
+TRAIN_START = _step_03.TRAIN_START
+evaluate = _step_03.evaluate
+
+_step_04 = import_module('04_evaluate_leagues')
+LEAGUE_PATH = _step_04.LEAGUE_PATH
+MODEL_NAMES = _step_04.MODEL_NAMES
+TIERS = _step_04.TIERS
+common_end_date = _step_04.common_end_date
+prediction_scores = _step_04.prediction_scores
+
+_step_05 = import_module('05_compare_market')
+BENCHMARK = _step_05.BENCHMARK
+add_odds_predictions = _step_05.add_odds_predictions
+
+_step_06 = import_module('06_add_market_features')
+MARKET_FIELD_PATH = _step_06.MARKET_FIELD_PATH
+market_features = _step_06.market_features
+
+_step_07 = import_module('07_train_market_models')
+FEATURE_SETS = _step_07.FEATURE_SETS
+fit_same_architecture = _step_07.fit_same_architecture
+
+_step_08 = import_module('08_audit_data')
+paired_test_mask = _step_08.paired_test_mask
+valid_odds = _step_08.valid_odds
 OUTPUT_MODELS = MODEL_DIR / "raw_only"
 
 
@@ -167,21 +204,10 @@ def main():
     changes.to_csv(REPORT_DIR / "external_data_impact_changes.csv", index=False)
     primary = changes.loc[changes.Window.eq("Paired common") & changes.Scope.isin(["Tier", "Combined"]),
                           ["FeatureSet", "Group", "Model", "Matches_Raw", "Accuracy_Raw", "Accuracy_Cleaned", "AccuracyChangePP"]]
-    write_report("external_data_impact.md", "Effect of external date/result cleaning / 外部清洗的影响",
-                 f"The raw branch rebuilds histories and refits all classifiers using Matches.csv alone. "
-                 "Both branches use its original odds. Selected hyperparameters are held fixed; this is not a new "
-                 "hyperparameter search. Primary scores use identical games whose raw AND source dates are held out "
-                 f"between July 2023 and {source_end.date()}, with agreeing results and valid supplied odds. "
-                 f"The raw native common cutoff is {raw_end.date()}, so native common scores use different cohorts "
-                 f"and must not be interpreted as a paired accuracy change. {int(changed.sum()):,} matches "
-                 f"({100*changed.mean():.2f}%) have at least one changed base feature after date/result cleaning. "
-                 "Elo and detailed statistics remain as supplied; missing values are not externally filled. "
-                 "原始分支仅使用 Matches.csv 重建历史并重新拟合；两分支使用相同原始赔率和固定模型参数。" 
-                 "主要比较要求同一比赛在原始日期及来源日期下均属于测试期，并且赛果一致。" 
-                 "因此配对表与各自自然窗口的结果需分别解读。", [("Paired accuracy changes / 配对准确率变化", primary),
-                 ("Raw-only run settings / 运行参数", pd.DataFrame(summary.items(), columns=["Setting", "Value"])),
-                 ("Raw-only fitting time / 拟合耗时", pd.DataFrame(timings))])
+    pd.DataFrame(timings).to_csv(REPORT_DIR / "raw_only_training.csv", index=False)
+    path = build_report(report_dir=REPORT_DIR, include_sensitivity=True)
     print(primary.to_string(index=False))
+    print(f"Unified study report saved to {path}.")
 
 
 if __name__ == "__main__":

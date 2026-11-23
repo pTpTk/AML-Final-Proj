@@ -1,18 +1,146 @@
 """Evaluate frozen classifiers on the top five leagues and all three league tiers."""
 
-import joblib
-import pandas as pd
-from threadpoolctl import threadpool_limits
+from importlib import import_module
 
-from src.models import (
-    DATA_PATH, FIELD_PATH, LABELS, MODEL_DIR, REPORT_DIR, TRAIN_START, TEST_START,
-    evaluate, season_labels,
-)
-from src.evaluation import (
-    LEAGUE_PATH, TIERS, MODEL_NAMES, select_matches, common_end_date,
-    summarize_predictions, coverage_table, accuracy_comparison, prediction_scores,
-)
-from src.reporting import write_report, preparation_note
+from sklearn.metrics import accuracy_score, f1_score, log_loss, recall_score
+from threadpoolctl import threadpool_limits
+import joblib
+import numpy as np
+import pandas as pd
+
+
+_step_00 = import_module('00_download_sources')
+ROOT = _step_00.ROOT
+
+_step_01 = import_module('01_clean_data')
+LABELS = _step_01.LABELS
+REPORT_DIR = _step_01.REPORT_DIR
+
+_step_03 = import_module('03_train_models')
+CANDIDATES = _step_03.CANDIDATES
+DATA_PATH = _step_03.DATA_PATH
+FIELD_PATH = _step_03.FIELD_PATH
+MODEL_DIR = _step_03.MODEL_DIR
+TEST_END = _step_03.TEST_END
+TEST_START = _step_03.TEST_START
+TRAIN_START = _step_03.TRAIN_START
+evaluate = _step_03.evaluate
+season_labels = _step_03.season_labels
+LEAGUE_PATH = ROOT / "docs" / "league_strength_2023.csv"
+TIERS = ["Top", "Mid", "Lower"]
+MODEL_NAMES = list(CANDIDATES)
+
+
+def select_matches(table, divisions, as_of=None):
+    """Keep only requested leagues, known results, and the held-out date window."""
+    today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
+    return table.loc[
+        table["Division"].isin(divisions)
+        & table["FTResult"].isin(LABELS)
+        & table["MatchDate"].ge(TEST_START)
+        & table["MatchDate"].lt(TEST_END)
+        & table["MatchDate"].le(today)
+    ]
+
+
+def common_end_date(matches, divisions):
+    """Stop the main comparison at the earliest last match among all 15 leagues."""
+    last_dates = matches.groupby("Division")["MatchDate"].max().reindex(divisions)
+    if last_dates.isna().any():
+        missing = last_dates.index[last_dates.isna()].tolist()
+        raise ValueError(f"Missing evaluation matches for: {missing}")
+    return last_dates.min()
+
+
+def prediction_scores(actual, predicted, probabilities):
+    """Score a stored prediction subset; this function never fits a model."""
+    return {
+        "Accuracy": accuracy_score(actual, predicted),
+        "BalancedAccuracy": recall_score(
+            actual, predicted, labels=np.unique(actual), average="macro", zero_division=0,
+        ),
+        "MacroF1": f1_score(actual, predicted, labels=LABELS, average="macro", zero_division=0),
+        "LogLoss": log_loss(actual, probabilities, labels=LABELS),
+        "DrawRecall": recall_score(actual, predicted, labels=["D"], average="macro", zero_division=0),
+    }
+
+
+def summarize_predictions(predictions, common_end):
+    """Score every model by league and tier, for matching dates and all available dates."""
+    rows = []
+    for window in ["Common", "Available"]:
+        # All available dates are secondary because some leagues end much earlier.
+        matches = predictions if window == "Available" else predictions.loc[
+            predictions["MatchDate"].le(common_end)
+        ]
+        for period in ["All", *sorted(matches["MatchDate"].dt.year.unique().astype(str))]:
+            # Calendar years work for both summer-to-spring and calendar-year leagues.
+            period_matches = matches if period == "All" else matches.loc[
+                matches["MatchDate"].dt.year.eq(int(period))
+            ]
+            for tier in TIERS:
+                tier_matches = period_matches.loc[period_matches["Tier"].eq(tier)]
+                groups = [("Tier", tier, tier_matches)]
+                groups += [("League", code, group) for code, group in tier_matches.groupby("Division")]
+                for scope, code, group in groups:
+                    if group.empty:
+                        continue
+                    for name in MODEL_NAMES:
+                        slug = name.lower().replace(" ", "_")
+                        probabilities = group[[f"{slug}_probability_{label}" for label in LABELS]]
+                        scores = prediction_scores(group["FTResult"], group[f"{slug}_prediction"], probabilities)
+                        rows.append({
+                            "Window": window, "Period": period, "Scope": scope,
+                            "Tier": tier, "Division": code, "Model": name,
+                            "Matches": len(group), **scores,
+                        })
+    metrics = pd.DataFrame(rows)
+    # A pooled accuracy weights leagues by match count. Also show each league
+    # receiving one fifth of the tier weight, regardless of its sample size.
+    keys = ["Window", "Period", "Tier", "Model"]
+    league_means = metrics.loc[metrics["Scope"].eq("League")].groupby(keys)["Accuracy"].mean()
+    league_means = league_means.rename("MeanLeagueAccuracy").reset_index()
+    metrics = metrics.merge(league_means, on=keys, how="left", validate="many_to_one")
+    metrics.loc[metrics["Scope"].eq("League"), "MeanLeagueAccuracy"] = np.nan
+    return metrics
+
+
+def coverage_table(matches, leagues, features, training_counts, common_end):
+    """Measure missing inputs and outcome frequencies without changing the inputs."""
+    # These detailed statistics exclude goals, results, venue, elapsed days and Elo.
+    stat_names = ("Shots", "ShotsOnTarget", "Fouls", "Corners", "YellowCards", "RedCards")
+    stat_columns = [field for field in features if any(
+        field.endswith(f"_{stat}{direction}") for stat in stat_names for direction in ["For", "Against"]
+    )]
+    rows = []
+    for window in ["Common", "Available"]:
+        selected = matches if window == "Available" else matches.loc[matches["MatchDate"].le(common_end)]
+        for code, group in selected.groupby("Division"):
+            rows.append({
+                "Window": window, "Division": code, "Matches": len(group),
+                "FirstMatch": group["MatchDate"].min().date(),
+                "LastMatch": group["MatchDate"].max().date(),
+                "TrainingMatches": int(training_counts.get(code, 0)),
+                "CurrentEloMissing": group[["HomeElo", "AwayElo"]].isna().to_numpy().mean(),
+                "DetailedStatsMissing": group[stat_columns].isna().to_numpy().mean(),
+                "AllFeaturesMissing": group[features].isna().to_numpy().mean(),
+                "CompleteFiveGameHistory": group[["Home_HistoryCount", "Away_HistoryCount"]].eq(5).all(axis=1).mean(),
+                "HomeWinRate": group["FTResult"].eq("H").mean(),
+                "DrawRate": group["FTResult"].eq("D").mean(),
+                "AwayWinRate": group["FTResult"].eq("A").mean(),
+            })
+    return pd.DataFrame(rows).merge(leagues, on="Division", validate="many_to_one")
+
+
+def accuracy_comparison(metrics, window="Common"):
+    """Return pooled tier accuracies with one column per frozen model."""
+    selected = metrics.loc[
+        metrics["Window"].eq(window) & metrics["Period"].eq("All") & metrics["Scope"].eq("Tier")
+    ]
+    comparison = selected.pivot(index="Tier", columns="Model", values="Accuracy").reindex(TIERS)
+    comparison = comparison.reindex(columns=MODEL_NAMES)
+    comparison.insert(0, "Matches", selected.groupby("Tier")["Matches"].first().reindex(TIERS))
+    return comparison.reset_index()
 
 
 def main():
@@ -64,23 +192,8 @@ def main():
     top_metrics = pd.DataFrame(top_rows)
     top_metrics.to_csv(REPORT_DIR / "top_five_model_metrics.csv", index=False)
     top.to_csv(REPORT_DIR / "top_five_model_predictions.csv", index=False)
-    write_report("top_five_evaluation.md", "Predictability across the top five leagues",
-                 "Frozen models; test dates July 2023–June 2026. No refitting or parameter selection. "
-                 "Earlier held-out games can become history for later games. " + preparation_note(),
-                 [("All seasons", top_metrics.loc[top_metrics["Season"].eq("All")]),
-                  ("By season", top_metrics.loc[top_metrics["Season"].ne("All")])])
-    write_report("league_tier_evaluation.md", "Predictability across 15 leagues",
-                 f"Primary comparison: July 2023 through {common_end.date()}, the earliest last match "
-                 "among all 15 leagues. Secondary Available results stop by June 2026. "
-                 "Tiers use published 2023 UEFA ranks. Coverage differences and outcome frequencies "
-                 "can affect accuracy; observed gaps are not significance or popularity claims. "
-                 "Full results, including calendar-year checks, are in league_tier_metrics.csv. " + preparation_note(),
-                 [("Tier accuracy", accuracy_comparison(metrics)),
-                  ("Coverage", coverage),
-                  ("League scores in the common window", metrics.loc[metrics["Window"].eq("Common")
-                   & metrics["Period"].eq("All") & metrics["Scope"].eq("League")])])
     print(accuracy_comparison(metrics).to_string())
-    print(f"Common end date: {common_end.date()}; saved top-five and tier reports.")
+    print(f"Common end date: {common_end.date()}; saved top-five and tier exports.")
 
 
 if __name__ == "__main__":

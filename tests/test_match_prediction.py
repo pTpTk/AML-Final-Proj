@@ -1,11 +1,15 @@
+from importlib import import_module
+from pathlib import Path
 import csv
 import tempfile
 import unittest
-from pathlib import Path
 
 import pandas as pd
 
-from src.features import STAT_COLUMNS, load_match_history
+
+_step_02 = import_module('02_build_features')
+STAT_COLUMNS = _step_02.STAT_COLUMNS
+load_match_history = _step_02.load_match_history
 
 
 class MatchHistoryTests(unittest.TestCase):

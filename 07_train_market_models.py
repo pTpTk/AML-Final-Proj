@@ -1,22 +1,90 @@
 """Fit the same selected classifiers with and without the 33 market inputs."""
 
+from importlib import import_module
 import hashlib
 import json
 import time
-import joblib
-import pandas as pd
-from threadpoolctl import threadpool_limits
 
-from src.data_sources import MARKET_COLUMNS, RAW_KEYS, CORRECTED_PATH
-from src.evaluation import LEAGUE_PATH, MODEL_NAMES, TIERS
-from src.features import MARKET_FIELD_PATH, MARKET_TRAINING_PATH as TRAINING_PATH
-from src.market_models import (
-    BENCHMARK, FEATURE_SETS, fit_same_architecture, select_train_and_test,
-    accuracy_changes, accuracy_table, tier_accuracy_table,
-)
-from src.models import FIELD_PATH, MODEL_DIR, REPORT_DIR, LABELS, evaluate
-from src.odds_evaluation import add_odds_predictions, score_comparisons
-from src.reporting import write_report, preparation_note
+from sklearn.base import clone
+from threadpoolctl import threadpool_limits
+import joblib
+import numpy as np
+import pandas as pd
+
+
+_step_01 = import_module('01_clean_data')
+CORRECTED_PATH = _step_01.CORRECTED_PATH
+LABELS = _step_01.LABELS
+MARKET_COLUMNS = _step_01.MARKET_COLUMNS
+RAW_KEYS = _step_01.RAW_KEYS
+REPORT_DIR = _step_01.REPORT_DIR
+
+_step_03 = import_module('03_train_models')
+FIELD_PATH = _step_03.FIELD_PATH
+MODEL_DIR = _step_03.MODEL_DIR
+TEST_END = _step_03.TEST_END
+TEST_START = _step_03.TEST_START
+TRAIN_START = _step_03.TRAIN_START
+evaluate = _step_03.evaluate
+
+_step_04 = import_module('04_evaluate_leagues')
+LEAGUE_PATH = _step_04.LEAGUE_PATH
+MODEL_NAMES = _step_04.MODEL_NAMES
+TIERS = _step_04.TIERS
+
+_step_05 = import_module('05_compare_market')
+BENCHMARK = _step_05.BENCHMARK
+add_odds_predictions = _step_05.add_odds_predictions
+score_comparisons = _step_05.score_comparisons
+
+_step_06 = import_module('06_add_market_features')
+MARKET_FIELD_PATH = _step_06.MARKET_FIELD_PATH
+TRAINING_PATH = _step_06.MARKET_TRAINING_PATH
+FEATURE_SETS = ["No odds", "With market odds"]
+
+
+def fit_same_architecture(original, X, y):
+    """Keep selected settings, discard fitted state, and fit fresh preprocessing."""
+    return clone(original).fit(X, y)
+
+
+def select_train_and_test(table, divisions, as_of=None):
+    """Use corrected source dates and targets; never randomly split the matches."""
+    today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
+    known = table["FTResult"].isin(LABELS)
+    train = table.loc[known & table["MatchDate"].ge(TRAIN_START) & table["MatchDate"].lt(TEST_START)]
+    valid_market = table[MARKET_COLUMNS].gt(1).all(axis=1) & np.isfinite(table[MARKET_COLUMNS]).all(axis=1)
+    test = table.loc[
+        known & table["Division"].isin(divisions) & table["MatchDate"].ge(TEST_START)
+        & table["MatchDate"].lt(TEST_END) & table["MatchDate"].le(today) & valid_market
+    ].copy()
+    if train.empty or test.empty:
+        raise ValueError("The chronological training or evaluation window is empty.")
+    return train, test
+
+
+def accuracy_changes(metrics):
+    """Pair the corrected control and augmented scores on identical test rows."""
+    keys = ["Window", "Period", "Scope", "Group", "Model"]
+    columns = [*keys, "Matches", "Accuracy", "BalancedAccuracy", "MacroF1", "LogLoss", "DrawRecall", "MeanLeagueAccuracy", "GapToBenchmark"]
+    control = metrics.loc[metrics["FeatureSet"].eq("No odds") & metrics["Model"].ne(BENCHMARK), columns]
+    augmented = metrics.loc[metrics["FeatureSet"].eq("With market odds") & metrics["Model"].ne(BENCHMARK), columns]
+    changes = control.merge(augmented, on=keys, suffixes=("_NoOdds", "_WithOdds"), validate="one_to_one")
+    if not changes["Matches_NoOdds"].eq(changes["Matches_WithOdds"]).all():
+        raise ValueError("Control and augmented models must use exactly the same match counts.")
+    changes["AccuracyChangePP"] = 100 * (changes["Accuracy_WithOdds"] - changes["Accuracy_NoOdds"])
+    changes["LogLossChange"] = changes["LogLoss_WithOdds"] - changes["LogLoss_NoOdds"]
+    return changes
+
+
+def accuracy_table(changes, window="Common", scope="Combined"):
+    """Display the before/after accuracy for each architecture, keeping the groups."""
+    rows = changes.loc[
+        changes["Window"].eq(window) & changes["Period"].eq("All") & changes["Scope"].eq(scope),
+        ["Group", "Model", "Matches_NoOdds", "Accuracy_NoOdds", "Accuracy_WithOdds", "AccuracyChangePP"],
+    ].copy()
+    return rows.rename(columns={"Matches_NoOdds": "Matches", "Accuracy_NoOdds": "NoOdds", "Accuracy_WithOdds": "WithOdds"})
+
 
 OUTPUT_MODEL_DIR = MODEL_DIR / "market_augmented"
 PREDICTION_PATH = REPORT_DIR / "league_tier_predictions.csv"
@@ -85,21 +153,8 @@ def main():
     metrics.to_csv(REPORT_DIR / "market_augmented_metrics.csv", index=False)
     changes.to_csv(REPORT_DIR / "market_augmented_accuracy_changes.csv", index=False)
     pd.concat(prediction_sets, ignore_index=True).to_csv(REPORT_DIR / "market_augmented_predictions.csv", index=False)
-    tables = [("Tier accuracy", tier_accuracy_table(changes, metrics)),
-              ("Pooled accuracy changes", accuracy_table(changes)),
-              ("Training runs", pd.DataFrame(fit_records))]
-    write_report("market_augmented_evaluation.md", "Adding market probabilities",
-                 f"Both feature sets use the same {len(train):,} labeled training rows before July 2023. "
-                 "The selected settings from step 03 are cloned and fitted afresh, including preprocessing. "
-                 f"No test-set tuning. Primary test window ends {common_end.date()}; "
-                 "every comparison uses identical eligible rows. The control uses 214 numeric features; "
-                 "the augmented models use 247. Market features use normalized inverse decimal odds. "
-                 "Historical quotes follow the team's venue and are shifted before joining. "
-                 "All quotes are supplied OddHome/OddDraw/OddAway values from Matches.csv; missing quotes stay missing. "
-                 "Results are descriptive and can differ from the draft outline after date preparation and "
-                 "the June 2026 cutoff. Detailed league/year metrics are in market_augmented_metrics.csv. " + preparation_note(), tables)
     print(accuracy_table(changes).to_string(index=False))
-    print(f"Report saved to {REPORT_DIR / 'market_augmented_evaluation.md'}")
+    print(f"Comparison exports saved to {REPORT_DIR}.")
 
 
 if __name__ == "__main__":

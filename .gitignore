@@ -17,6 +17,9 @@ __pycache__/
 coverage.xml
 htmlcov/
 
+# Temporary run logs
+*.log
+
 # Keep original datasets; reproduce other data with the numbered scripts.
 /data/*
 !/data/Matches.csv

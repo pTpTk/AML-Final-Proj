@@ -1,13 +1,17 @@
+from importlib import import_module
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from src.features import (
-    MARKET_COLUMNS, PROBABILITY_COLUMNS, market_features,
-)
 
-from src.data_sources import choose_average_odds
+_step_01 = import_module('01_clean_data')
+MARKET_COLUMNS = _step_01.MARKET_COLUMNS
+choose_average_odds = _step_01.choose_average_odds
+
+_step_06 = import_module('06_add_market_features')
+PROBABILITY_COLUMNS = _step_06.PROBABILITY_COLUMNS
+market_features = _step_06.market_features
 
 
 class MarketTrainingFeatureTests(unittest.TestCase):
