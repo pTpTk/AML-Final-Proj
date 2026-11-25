@@ -1,6 +1,7 @@
 """Measure the effect of external date/result cleaning while holding supplied odds and model settings fixed."""
 
 from importlib import import_module
+import argparse
 import hashlib
 import json
 import time
@@ -30,6 +31,7 @@ DATA_PATH = _step_03.DATA_PATH
 FIELD_PATH = _step_03.FIELD_PATH
 MODEL_DIR = _step_03.MODEL_DIR
 TEST_END = _step_03.TEST_END
+TEST_AS_OF = _step_03.TEST_AS_OF
 TEST_START = _step_03.TEST_START
 TRAIN_START = _step_03.TRAIN_START
 evaluate = _step_03.evaluate
@@ -100,7 +102,7 @@ def history_changes(raw, raw_features, base_fields, audit):
     return changed_rows
 
 
-def main():
+def main(evaluate_only=False):
     preparation = json.loads((REPORT_DIR / "data_preparation.json").read_text())
     if not preparation["Mode"].startswith("Source-verified"):
         raise ValueError("Step 09 requires source-verified main outputs; run steps 00–07 in that mode first.")
@@ -142,6 +144,7 @@ def main():
     summary = {"RawInputSHA256": hashlib.sha256(RAW_PATH.read_bytes()).hexdigest(),
                "Protocol": "Fixed selected settings; raw-only refitting without retuning; supplied odds in both branches",
                "RawTrainingMatches": len(train), "RawTestMatchesWithOdds": len(test),
+               "EvaluationAsOf": str(TEST_AS_OF.date()),
                "RawCommonEnd": str(raw_end.date()), "SourceCommonEnd": str(source_end.date()),
                "MatchesWithChangedBaseFeatures": int(changed.sum()),
                "MatchesWithChangedBaseFeaturesPercent": 100 * changed.mean()}
@@ -160,13 +163,15 @@ def main():
                 started = time.perf_counter()
                 slug = name.lower().replace(" ", "_")
                 original = joblib.load(MODEL_DIR / f"{slug}.joblib")
-                print(f"Raw-only fit: {feature_set}; {name}", flush=True)
-                model = fit_same_architecture(original, train[selected], train.FTResult)
+                print(f"Raw-only {'evaluation' if evaluate_only else 'fit'}: {feature_set}; {name}", flush=True)
+                model = (joblib.load(folder / f"{slug}.joblib") if evaluate_only
+                         else fit_same_architecture(original, train[selected], train.FTResult))
                 predicted, probabilities, _ = evaluate(model, test[selected], test.FTResult)
                 variant[f"{slug}_prediction"] = predicted
                 for position, label in enumerate(LABELS):
                     variant[f"{slug}_probability_{label}"] = probabilities[:, position]
-                joblib.dump(model, folder / f"{slug}.joblib", compress=3)
+                if not evaluate_only:
+                    joblib.dump(model, folder / f"{slug}.joblib", compress=3)
                 timings.append({"FeatureSet": feature_set, "Model": name, "Seconds": time.perf_counter()-started})
             prediction_sets.append(variant)
             metrics.extend(summarize(variant, "Raw only", feature_set, "Native full"))
@@ -202,13 +207,16 @@ def main():
     changes = left.merge(right, on=keys, suffixes=("_Raw", "_Cleaned"), validate="one_to_one")
     changes["AccuracyChangePP"] = 100 * (changes.Accuracy_Cleaned - changes.Accuracy_Raw)
     changes.to_csv(REPORT_DIR / "external_data_impact_changes.csv", index=False)
-    primary = changes.loc[changes.Window.eq("Paired common") & changes.Scope.isin(["Tier", "Combined"]),
+    primary = changes.loc[changes.Window.eq("Paired full") & changes.Scope.isin(["Tier", "Combined"]),
                           ["FeatureSet", "Group", "Model", "Matches_Raw", "Accuracy_Raw", "Accuracy_Cleaned", "AccuracyChangePP"]]
-    pd.DataFrame(timings).to_csv(REPORT_DIR / "raw_only_training.csv", index=False)
+    if not evaluate_only:
+        pd.DataFrame(timings).to_csv(REPORT_DIR / "raw_only_training.csv", index=False)
     path = build_report(report_dir=REPORT_DIR, include_sensitivity=True)
     print(primary.to_string(index=False))
     print(f"Unified study report saved to {path}.")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evaluate-only", action="store_true", help="Reuse fitted models and refresh test results.")
+    main(evaluate_only=parser.parse_args().evaluate_only)

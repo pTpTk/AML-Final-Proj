@@ -1,6 +1,7 @@
 """Select the three classifiers on earlier validation and test the Premier League."""
 
 from importlib import import_module
+import argparse
 import time
 
 from sklearn.dummy import DummyClassifier
@@ -29,7 +30,14 @@ MODEL_DIR = ROOT / "models"
 TRAIN_START = pd.Timestamp("2000-07-01")
 VALIDATION_START = pd.Timestamp("2021-07-01")
 TEST_START = pd.Timestamp("2023-07-01")
-TEST_END = pd.Timestamp("2026-07-01")  # Exclusive: stop after 2025/26.
+TEST_AS_OF = pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
+TEST_END = TEST_AS_OF + pd.Timedelta(days=1)  # Exclusive: include today's matches.
+
+
+def evaluation_dates(dates, as_of=None):
+    """Apply the same July 2023–as-of-date window to every evaluation."""
+    end = pd.Timestamp(as_of).normalize() if as_of is not None else TEST_AS_OF
+    return dates.ge(TEST_START) & dates.lt(end + pd.Timedelta(days=1))
 
 # Select settings on the earlier chronological validation window, before refitting.
 CANDIDATES = {
@@ -47,7 +55,6 @@ CANDIDATES = {
 
 def split_data(table, as_of=None):
     """Use date windows, never a random split, and keep only known H/D/A targets."""
-    today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
     known_result = table["FTResult"].isin(LABELS)
     dates = table["MatchDate"]
     # Every league contributes to training from July 2000 through June 2023.
@@ -55,7 +62,7 @@ def split_data(table, as_of=None):
     # E0 is the English Premier League; E1 is the English Championship.
     test = table.loc[
         known_result & table["Division"].eq("E0")
-        & dates.ge(TEST_START) & dates.lt(TEST_END) & dates.le(today)
+        & evaluation_dates(dates, as_of)
     ]
     if train.empty or test.empty:
         raise ValueError("The requested training or Premier League evaluation window is empty.")
@@ -122,7 +129,7 @@ def season_labels(dates):
     return start.astype(str) + "/" + ((start + 1) % 100).astype(str).str.zfill(2)
 
 
-def main():
+def main(evaluate_only=False):
     # Read the feature dictionary so only the documented numeric inputs are used.
     fields = pd.read_csv(FIELD_PATH)
     features = fields.loc[fields["role"].eq("feature"), "field"].tolist()
@@ -145,9 +152,10 @@ def main():
     with threadpool_limits(limits=2):
         for name, candidates in CANDIDATES.items():
             started = time.perf_counter()
-            print(f"Selecting and fitting {name}...", flush=True)
+            print(f"{'Evaluating' if evaluate_only else 'Selecting and fitting'} {name}...", flush=True)
+            slug = name.lower().replace(" ", "_")
             best_loss, best_parameters = float("inf"), None
-            for parameters in candidates:
+            for parameters in ([] if evaluate_only else candidates):
                 candidate = make_model(name, parameters)
                 candidate.fit(tuning_train[features], tuning_train["FTResult"])
                 _, _, scores = evaluate(candidate, validation[features], validation["FTResult"])
@@ -156,15 +164,18 @@ def main():
                     best_loss, best_parameters = scores["LogLoss"], parameters
 
             # Refit from scratch so the final estimator sees every allowed season.
-            model = make_model(name, best_parameters)
-            model.fit(train[features], train["FTResult"])
+            if evaluate_only:
+                model = joblib.load(MODEL_DIR / f"{slug}.joblib")
+            else:
+                model = make_model(name, best_parameters)
+                model.fit(train[features], train["FTResult"])
             predicted, probabilities, scores = evaluate(model, test[features], test["FTResult"])
             metric_rows.append({"Model": name, "Season": "All", "Matches": len(test), **scores})
-            slug = name.lower().replace(" ", "_")
             predictions_table[f"{slug}_prediction"] = predicted
             for position, label in enumerate(LABELS):
                 predictions_table[f"{slug}_probability_{label}"] = probabilities[:, position]
-            joblib.dump(model, MODEL_DIR / f"{slug}.joblib", compress=3)
+            if not evaluate_only:
+                joblib.dump(model, MODEL_DIR / f"{slug}.joblib", compress=3)
 
             # Score the same frozen estimator separately for each test season.
             seasons = season_labels(test["MatchDate"])
@@ -177,13 +188,16 @@ def main():
 
     # Save numerical exports; the unified study document is built after the audit.
     metrics = pd.DataFrame(metric_rows)
-    validation_scores = pd.DataFrame(validation_rows)
-    validation_scores["Selected"] = validation_scores.groupby("Model")["LogLoss"].rank(method="first").eq(1)
     metrics.to_csv(REPORT_DIR / "model_metrics.csv", index=False)
-    validation_scores.to_csv(REPORT_DIR / "validation_metrics.csv", index=False)
+    if not evaluate_only:
+        validation_scores = pd.DataFrame(validation_rows)
+        validation_scores["Selected"] = validation_scores.groupby("Model")["LogLoss"].rank(method="first").eq(1)
+        validation_scores.to_csv(REPORT_DIR / "validation_metrics.csv", index=False)
     predictions_table.to_csv(REPORT_DIR / "model_predictions.csv", index=False)
     print(f"Metrics and predictions saved to {REPORT_DIR}.", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evaluate-only", action="store_true", help="Reuse fitted models and refresh test results.")
+    main(evaluate_only=parser.parse_args().evaluate_only)

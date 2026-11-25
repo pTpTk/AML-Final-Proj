@@ -19,6 +19,23 @@ summarize_predictions = _step_04.summarize_predictions
 
 
 class TierEvaluationTests(unittest.TestCase):
+    def test_all_evaluators_share_the_present_day_window_including_partial_seasons(self):
+        step_03 = import_module('03_train_models')
+        step_07 = import_module('07_train_market_models')
+        dates = ["2023-06-30", "2023-07-01", "2026-06-30", "2026-07-01",
+                 "2026-11-25", "2026-11-26", "2027-01-01", "2026-11-01"]
+        table = pd.DataFrame({
+            "Division": ["E0"] * len(dates), "MatchDate": pd.to_datetime(dates),
+            "FTResult": ["H"] * (len(dates) - 1) + [None],
+            "MarketHome": 2., "MarketDraw": 3., "MarketAway": 4.,
+        })
+        expected = [1, 2, 3, 4]
+        _, premier = step_03.split_data(table, as_of="2026-11-25")
+        tiers = select_matches(table, ["E0"], as_of="2026-11-25")
+        _, market = step_07.select_train_and_test(table, ["E0"], as_of="2026-11-25")
+        for selected in [premier, tiers, market]:
+            self.assertEqual(selected.index.tolist(), expected)
+
     def test_groups_follow_the_ranking_rule_among_all_available_european_top_divisions(self):
         rankings = pd.read_csv(LEAGUE_PATH).sort_values("UEFARank2023")
         self.assertEqual(len(rankings), 21)
@@ -84,6 +101,8 @@ class TierEvaluationTests(unittest.TestCase):
         self.assertEqual(pooled.loc["Available", "Matches"], 5)
         self.assertEqual(pooled.loc["Available", "Accuracy"], 0.8)
         self.assertEqual(pooled.loc["Available", "MeanLeagueAccuracy"], 0.75)
+        primary = _step_04.accuracy_comparison(metrics).set_index("Tier")
+        self.assertEqual(primary.loc["Mid", "Matches"], 5)
 
 
 if __name__ == "__main__":

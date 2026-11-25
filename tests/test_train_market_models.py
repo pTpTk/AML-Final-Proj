@@ -25,7 +25,7 @@ class MarketModelTrainingTests(unittest.TestCase):
         })
         train, test = select_train_and_test(table, ["E0"], as_of="2026-11-23")
         self.assertEqual(train.index.tolist(), [1])
-        self.assertEqual(test.index.tolist(), [2, 3, 4])
+        self.assertEqual(test.index.tolist(), [2, 3, 4, 6])
         _, earlier_test = select_train_and_test(table, ["E0"], as_of="2024-12-05")
         self.assertEqual(earlier_test.index.tolist(), [2, 3])
 

@@ -25,7 +25,7 @@ class ModelTrainingTests(unittest.TestCase):
         })
         train, test = split_data(table, as_of="2026-11-11")
         self.assertEqual(train.index.tolist(), [1, 2])
-        self.assertEqual(test.index.tolist(), [3])
+        self.assertEqual(test.index.tolist(), [3, 6])
         self.assertLess(train["MatchDate"].max(), test["MatchDate"].min())
 
     def test_english_season_labels_change_in_july(self):

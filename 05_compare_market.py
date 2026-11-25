@@ -91,7 +91,7 @@ def score_comparisons(matches, benchmark_name):
 BENCHMARK = "Supplied odds"
 
 
-def all_periods(metrics, scope=None, window="Common"):
+def all_periods(metrics, scope=None, window="Available"):
     mask = metrics["Period"].eq("All") & metrics["Window"].eq(window)
     if scope is not None:
         mask &= metrics["Scope"].eq(scope)

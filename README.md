@@ -27,6 +27,21 @@ Step 08 generates `reports/study.md` from the numerical exports. Step 09 refresh
 .venv/bin/python tools/build_report.py
 ```
 
+All primary evaluations use the same date bounds: **1 July 2023 through the current UTC date**, inclusive, including partial seasons. Each league contributes its available labeled fixtures; its data can end before the cutoff. `reports/evaluation_window.json` records the cutoff and the report lists actual coverage for each league. `Available` is the primary CSV window. `Common` is a secondary sensitivity truncated to the earliest league end date.
+
+To refresh evaluation with existing fitted models after changing the cutoff or evaluation code, run:
+
+```bash
+.venv/bin/python 03_train_models.py --evaluate-only
+.venv/bin/python 04_evaluate_leagues.py
+.venv/bin/python 05_compare_market.py
+.venv/bin/python 07_train_market_models.py --evaluate-only
+.venv/bin/python 08_audit_data.py
+.venv/bin/python 09_compare_without_external.py --evaluate-only
+```
+
+These commands require the existing prepared data and fitted model artifacts. Changes to inputs, features or training settings require rerunning the corresponding preparation and training steps.
+
 For a workflow using `Matches.csv` alone, skip 00, run `01_clean_data.py --raw-only`, then run 02–08. Step 09 requires source-verified preparation. Switching preparation mode requires rerunning downstream steps. Step 08 omits stale external evidence; the report builder also omits external sensitivity in raw-only mode.
 
 After one complete source-verified run, capture and verify a repeat run with:

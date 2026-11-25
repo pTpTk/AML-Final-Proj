@@ -57,7 +57,7 @@ def export_class_diagnostics(predictions, report_dir):
 def build_report(report_dir=None, include_sensitivity=True, allow_incomplete=False):
     """Publish study.md after step 08/09; never include a verified-date sensitivity in raw-only mode."""
     report_dir = Path(report_dir) if report_dir is not None else ROOT / "reports"
-    required = ["data_preparation.json", "model_predictions.csv", "model_metrics.csv", "validation_metrics.csv",
+    required = ["data_preparation.json", "evaluation_window.json", "model_predictions.csv", "model_metrics.csv", "validation_metrics.csv",
                 "top_five_model_metrics.csv", "league_tier_metrics.csv", "league_tier_coverage.csv",
                 "league_tier_predictions.csv", "supplied_odds_metrics.csv", "market_augmented_metrics.csv",
                 "market_augmented_training.csv", "market_augmented_accuracy_changes.csv", "data_quality_summary.csv"]
@@ -68,22 +68,27 @@ def build_report(report_dir=None, include_sensitivity=True, allow_incomplete=Fal
         raise FileNotFoundError("Complete steps 00–08 before building the study report. Missing: " + ", ".join(missing))
     read = lambda name: pd.read_csv(report_dir / name)
     preparation = json.loads((report_dir / "data_preparation.json").read_text())
+    window = json.loads((report_dir / "evaluation_window.json").read_text())
+    evaluation_start, evaluation_end = window["StartDate"], window["AsOf"]
     verified = preparation["Mode"].startswith("Source-verified")
     include_sensitivity = include_sensitivity and verified
     top = read("top_five_model_metrics.csv").query("Season == 'All'")
-    tier = read("league_tier_metrics.csv").query("Window == 'Common' and Period == 'All' and Scope == 'Tier'")
-    market = read("supplied_odds_metrics.csv").query("Window == 'Common' and Period == 'All'")
-    augmented = read("market_augmented_metrics.csv").query("Window == 'Common' and Period == 'All'")
-    changes = read("market_augmented_accuracy_changes.csv").query("Window == 'Common' and Period == 'All'")
-    coverage = read("league_tier_coverage.csv").query("Window == 'Common'")
+    tier = read("league_tier_metrics.csv").query("Window == 'Available' and Period == 'All' and Scope == 'Tier'")
+    market = read("supplied_odds_metrics.csv").query("Window == 'Available' and Period == 'All'")
+    augmented = read("market_augmented_metrics.csv").query("Window == 'Available' and Period == 'All'")
+    changes = read("market_augmented_accuracy_changes.csv").query("Window == 'Available' and Period == 'All'")
+    coverage = read("league_tier_coverage.csv").query("Window == 'Available'")
     selected = read("validation_metrics.csv").query("Selected")
     training = read("market_augmented_training.csv")
     quality = read("data_quality_summary.csv")
     rankings = pd.read_csv(ROOT / "docs/league_strength_2023.csv")
     predictions = read("model_predictions.csv")
     classes, confusion = export_class_diagnostics(predictions, report_dir)
-    common_end = pd.to_datetime(coverage.LastMatch).max().date().isoformat()
-    common_n = int(tier.groupby("Tier").Matches.first().sum())
+    common_end = window["CommonEnd"]
+    last_available = coverage.LastMatch.max()
+    evaluation_n = int(tier.groupby("Tier").Matches.first().sum())
+    date_coverage_rows = [[row.Tier, row.Division, int(row.Matches), row.FirstMatch, row.LastMatch]
+                          for tier_name in TIERS for row in coverage.loc[coverage.Tier.eq(tier_name)].itertuples()]
     eligible_n = int(market.loc[market.Scope.eq("Combined") & market.Model.eq("Supplied odds"), "Matches"].iloc[0])
     training_n = int(training.TrainingMatches.iloc[0])
     prepared = pd.read_csv(ROOT / "data/MatchesChronological.csv", usecols=["Division", "MatchDate", "FTResult"], parse_dates=["MatchDate"])
@@ -176,14 +181,16 @@ def build_report(report_dir=None, include_sensitivity=True, allow_incomplete=Fal
         settings = json.loads((report_dir / "external_data_impact_settings.json").read_text())
         if settings["RawInputSHA256"] != preparation["RawSHA256"]:
             raise ValueError("Cleaning-sensitivity inputs differ from the main study; rerun step 09.")
-        impact = read("external_data_impact_changes.csv").query("Window == 'Paired common' and Scope == 'Combined'")
+        if settings.get("EvaluationAsOf") != evaluation_end:
+            raise ValueError("Cleaning sensitivity uses a different evaluation end date; rerun step 09.")
+        impact = read("external_data_impact_changes.csv").query("Window == 'Paired full' and Scope == 'Combined'")
         sensitivity_rows = []
         for name in MODELS:
             part = impact.loc[impact.Model.eq(name)]
             sensitivity_rows.append([NAMES[name], int(part.Matches_Raw.iloc[0]),
                                      *[f"{part.loc[part.FeatureSet.eq(feature), 'AccuracyChangePP'].iloc[0]:+.2f}" for feature in ["No odds", "With market odds"]]])
         paired_n = int(impact.Matches_Raw.iloc[0])
-        sensitivity = f"""Step 09 rebuilds histories and refits both feature variants from `Matches.csv` alone, with the selected settings fixed. Both branches use the same supplied odds. The primary sensitivity comparison contains **{paired_n:,} identical fixtures** whose raw and verified dates both fall between July 2023 and {settings['SourceCommonEnd']}, with agreeing targets and valid supplied odds. This differs from the {eligible_n:,}-fixture primary odds comparison. Native raw-date and verified-date common windows end on {settings['RawCommonEnd']} and {settings['SourceCommonEnd']}, respectively, so their unpaired scores are not an estimate of a cleaning effect.
+        sensitivity = f"""Step 09 rebuilds histories and fits both feature variants from `Matches.csv` alone, with the selected settings fixed. Saved models can be reused with `--evaluate-only`. Both branches use the same supplied odds. The primary sensitivity comparison contains **{paired_n:,} identical fixtures** whose raw and verified dates both fall between {evaluation_start} and {evaluation_end}, with agreeing targets and valid supplied odds. This differs from the {eligible_n:,}-fixture primary odds comparison because pairing also requires agreement on eligibility under both date treatments. Secondary overlap-window scores are retained separately; their raw-date and verified-date cutoffs are {settings['RawCommonEnd']} and {settings['SourceCommonEnd']}, respectively.
 
 {markdown_table('cleaning_sensitivity', ['Model', 'Paired matches', 'Without odds (pp)', 'With odds (pp)'], sensitivity_rows)}
 
@@ -205,7 +212,7 @@ Values are cleaned minus raw accuracy, in percentage points. Date/result verific
 
 This is the single study document, following the sequence in [outline.pdf](../../outline.pdf): compare leagues, compare predictions with the odds favourite, then add odds as model inputs. Tables are generated from the numerical exports by [tools/build_report.py](../tools/build_report.py). Percentages are accuracy unless otherwise stated; pp means percentage points. The PDF is the original design draft, not the source of the numerical results below.
 
-**Preparation:** {preparation['Mode']}. **Training:** {training_n:,} labeled matches. **Main tier window:** July 2023–{common_end}. **Report built:** {datetime.now(timezone.utc).date().isoformat()} UTC.
+**Preparation:** {preparation['Mode']}. **Training:** {training_n:,} labeled matches. **Evaluation window for all leagues:** {evaluation_start}–{evaluation_end} inclusive. **Report built:** {datetime.now(timezone.utc).date().isoformat()} UTC.
 
 ## 1. Match predictability across leagues
 
@@ -229,7 +236,7 @@ All 48 fields, domain errors and per-league counts remain available in [data_qua
 
 The base table contains **219 columns: 214 numeric inputs, four metadata fields and one target**. Inputs are current home/away Elo, two history counts and 21 fields for each team's five preceding matches. Each historical match supplies elapsed days, venue, team/opponent Elo, points (3/1/0), and goals, half-time goals, shots, shots on target, fouls, corners and yellow/red cards for and against. `Previous1` is most recent. Histories cross venues, seasons and divisions and group the supplied club names; other renamings are not inferred. Stable date/kickoff ordering puts unknown times first within a date. Shifting precedes joining, so current results and statistics are excluded. Earlier held-out games can become history for later predictions. Metadata, current statistics, precomputed form and odds-derived raw fields are excluded from the base inputs. See the [base field dictionary](../docs/match_prediction_fields.csv).
 
-Training uses all available leagues from **2000-07-01 through 2023-06-30**. Candidate models fit dates before July 2021; selection minimizes log loss on **{validation_n:,} Premier League fixtures in July 2021–June 2023**. Models are then fitted afresh on the full training window. The grid is Naive Bayes `var_smoothing` = 0.01/1/10, logistic `C` = 0.1/1, and boosting `(max_leaf_nodes, l2_regularization)` = (15, 1)/(31, 10). The test window is **2023-07-01–2026-06-30**, limited to available known results and elapsed dates; there is no test-set tuning.
+Training uses all available leagues from **2000-07-01 through 2023-06-30**. Candidate models fit dates before July 2021; selection minimizes log loss on **{validation_n:,} Premier League fixtures in July 2021–June 2023**. Models are then fitted afresh on the full training window. The grid is Naive Bayes `var_smoothing` = 0.01/1/10, logistic `C` = 0.1/1, and boosting `(max_leaf_nodes, l2_regularization)` = (15, 1)/(31, 10). Every primary evaluation uses **{evaluation_start}–{evaluation_end} inclusive**, from season 2023/24 through the run's present day, including available 2026/27 fixtures. Only available known results enter evaluation; there is no test-set tuning. The UTC run date is saved in [evaluation_window.json](evaluation_window.json).
 
 {markdown_table('model_selection', ['Model', 'Selected parameters', 'Validation log loss', 'Reason'], parameter_rows)}
 
@@ -239,7 +246,7 @@ Accuracy is correct predictions divided by match count; balanced accuracy averag
 
 ### 1.3 Top-five league results
 
-These frozen base-model scores use the full three-season test window, subject to available labeled matches. They are a different time cohort from the tier comparison below.
+These frozen base-model scores use the same {evaluation_start}–{evaluation_end} window as the tier comparison below. The Top-tier row pools exactly these five leagues' fixtures, including the available partial 2026/27 season.
 
 {top_table}
 
@@ -251,7 +258,11 @@ There are 21 available European national top divisions. Sort their published **2
 
 {markdown_table('league_groups', ['Tier', 'Leagues', '2023 UEFA ranks'], group_rows)}
 
-The primary comparison stops at the earliest last observed match among all 15 leagues: **{common_end}**, giving **{common_n:,} matches**. Secondary `Available` scores retain each league's dates through June 2026; calendar-year checks accommodate summer-season leagues.
+The primary `Available` comparison uses **{evaluation_start}–{evaluation_end} inclusive** for every league, giving **{evaluation_n:,} matches**. Each league contributes every available labeled fixture within those bounds. The supplied dataset ends earlier for some leagues, so a shared evaluation window does not imply equal coverage or match counts. The latest selected fixture is **{last_available}**; later dates through the cutoff have no supplied fixtures. The table below records actual coverage. Smaller leagues and different season formats also produce different counts.
+
+{markdown_table('date_coverage', ['Tier', 'Division', 'Matches', 'First available match', 'Last available match'], date_coverage_rows)}
+
+Secondary `Common` scores truncate every league at the earliest last available match, **{common_end}**, solely as an overlap-window sensitivity. They do not supply the primary tables. Calendar-year checks accommodate summer-season leagues. Unequal actual coverage remains a limitation when interpreting tier differences.
 
 {base_table}
 
@@ -271,11 +282,11 @@ Implied probabilities use reciprocal decimal prices and proportional removal of 
 
 Normalizing the decimal prices themselves would reverse their meaning. These are the supplied quotes: a historical Premier League 2023/24 sample matched source averages rather than Bet365, but bookmaker identity and quote timing are not established for every league/season. External average quotes help verify identities and provenance; they never replace a supplied input. The benchmark is called **Supplied odds**. Proportional normalization does not guarantee calibration.
 
-The paired primary comparison contains **{eligible_n:,} eligible fixtures** through {common_end}. The CSVs retain additional available-window, calendar-year and tie-sensitivity results.
+The paired primary comparison contains **{eligible_n:,} eligible fixtures** in {evaluation_start}–{evaluation_end}. The CSVs retain additional overlap-window, calendar-year and tie-sensitivity results.
 
 {market_table}
 
-Across the nine tier/classifier base-model comparisons, the market advantage ranges from **{base_gaps.min():.2f} to {base_gaps.max():.2f} pp**. Pooled favourite accuracy is **{market_pooled.Accuracy:.2%}**, with log loss **{market_pooled.LogLoss:.4f}**. There are {int(market_pooled.TiedFavourites)} tied favourites in the common cohort; fixed tie priority and unique-favourite sensitivity are exported in [supplied_odds_metrics.csv](supplied_odds_metrics.csv). Accuracy does not measure betting returns, because prices, stakes and transaction costs would also matter.
+Across the nine tier/classifier base-model comparisons, the market advantage ranges from **{base_gaps.min():.2f} to {base_gaps.max():.2f} pp**. Pooled favourite accuracy is **{market_pooled.Accuracy:.2%}**, with log loss **{market_pooled.LogLoss:.4f}**. There are {int(market_pooled.TiedFavourites)} tied favourites in the primary cohort; fixed tie priority and unique-favourite sensitivity are exported in [supplied_odds_metrics.csv](supplied_odds_metrics.csv). Accuracy does not measure betting returns, because prices, stakes and transaction costs would also matter.
 
 ## 3. Adding odds as model inputs
 
@@ -313,9 +324,9 @@ The [README](../README.md) gives setup and numbered-run commands. The implementa
 
 Source snapshots are acquired explicitly in step 00 and reused unless missing or refreshed. The recorded full rerun on 2026-11-23 reused and hashed all 583 cached snapshots, originally acquired as `Downloaded`. Keep snapshots and `download_manifest.csv`: public URL contents can change. The raw input SHA-256 for this report is `{preparation['RawSHA256']}`. Source-verified preparation is optional; `01_clean_data.py --raw-only` followed by 02–08 uses only the master data and omits external evidence. Switching mode requires rerunning downstream steps.
 
-The verified full 00–09 run passed 35 existing tests; after cleanup, the suite contains 36 tests, including a raw-only stale-audit regression. Independent arithmetic checked 4,206 metric rows (38,058 scalar scores), with 45 verification checks passing. The subsequent file-layout cleanup preserved all model artifacts and regenerated data. These statements describe the recorded verification; logs, commands, hashes, table-by-table checks and layout evidence are in [reproduction/](reproduction/). Seasonal log loss can differ by a few billionths when reconstructed from full-batch float32 predictions; replaying the original seasonal batch reproduces it exactly. Published report precision is unaffected.
+The earlier full 00–09 run and subsequent layout verification are retained as historical evidence in [reproduction/](reproduction/). The evaluation-window correction reuses the fitted estimators and includes available 2026/27 fixtures in every primary comparison. Run the README's unit tests, seasonal replay and independent arithmetic verifier to check the current exports. Seasonal log loss can differ by a few billionths when reconstructed from full-batch float32 predictions; replaying the original seasonal batch reproduces it exactly. Published report precision is unaffected.
 
-The draft PDF has 63 accuracy entries, including repeated cells; 13 agree and 50 differ at its one-decimal-percent precision. [outline_number_comparison.csv](reproduction/outline_number_comparison.csv) records every original value, replacement, cohort size and difference. This document supersedes the PDF's numbers and corrects its ambiguous odds formula. Different time windows must remain labeled; old draft scores cannot be attributed to one historical cause without their missing cohort and model provenance.
+The draft PDF has 63 accuracy entries, including repeated cells. [outline_number_comparison.csv](reproduction/outline_number_comparison.csv) records every original value, replacement, cohort size and difference when the independent verifier runs. This document supersedes the PDF's numbers and corrects its ambiguous odds formula. Primary Big Five and tier results use the same requested time bounds; older draft scores cannot be attributed to one historical cause without their missing cohort and model provenance.
 
 Missingness and provisional data remain material limitations. Elo is preserved as supplied, not independently reconstructed; the dataset describes values after June 2025 as a provisional continuation. Date verification does not recover missing technical statistics, guarantee calibrated probabilities, prove intrinsic league uncertainty or support a causal popularity conclusion. The supported findings are differences in these models' observed held-out performance under the stated data and evaluation protocol.
 

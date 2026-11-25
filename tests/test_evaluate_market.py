@@ -125,6 +125,8 @@ class MarketEvaluationTests(unittest.TestCase):
             for label, probability in zip(LABELS, [0.2, 0.2, 0.6]):
                 matches[f"{slug}_probability_{label}"] = probability
         metrics = score_comparisons(matches, BENCHMARK)
+        primary = _step_05.all_periods(metrics, "Tier")
+        self.assertTrue(primary.Window.eq("Available").all())
         overall = metrics.loc[metrics.Window.eq("Common") & metrics.Period.eq("All") & metrics.Scope.eq("Tier")]
         self.assertEqual(len(overall), 5)
         self.assertTrue(overall.Matches.eq(4).all())

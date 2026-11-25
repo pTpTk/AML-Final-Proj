@@ -1,6 +1,7 @@
 """Fit the same selected classifiers with and without the 33 market inputs."""
 
 from importlib import import_module
+import argparse
 import hashlib
 import json
 import time
@@ -22,7 +23,7 @@ REPORT_DIR = _step_01.REPORT_DIR
 _step_03 = import_module('03_train_models')
 FIELD_PATH = _step_03.FIELD_PATH
 MODEL_DIR = _step_03.MODEL_DIR
-TEST_END = _step_03.TEST_END
+evaluation_dates = _step_03.evaluation_dates
 TEST_START = _step_03.TEST_START
 TRAIN_START = _step_03.TRAIN_START
 evaluate = _step_03.evaluate
@@ -50,13 +51,12 @@ def fit_same_architecture(original, X, y):
 
 def select_train_and_test(table, divisions, as_of=None):
     """Use corrected source dates and targets; never randomly split the matches."""
-    today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
     known = table["FTResult"].isin(LABELS)
     train = table.loc[known & table["MatchDate"].ge(TRAIN_START) & table["MatchDate"].lt(TEST_START)]
     valid_market = table[MARKET_COLUMNS].gt(1).all(axis=1) & np.isfinite(table[MARKET_COLUMNS]).all(axis=1)
     test = table.loc[
-        known & table["Division"].isin(divisions) & table["MatchDate"].ge(TEST_START)
-        & table["MatchDate"].lt(TEST_END) & table["MatchDate"].le(today) & valid_market
+        known & table["Division"].isin(divisions)
+        & evaluation_dates(table["MatchDate"], as_of) & valid_market
     ].copy()
     if train.empty or test.empty:
         raise ValueError("The chronological training or evaluation window is empty.")
@@ -77,7 +77,7 @@ def accuracy_changes(metrics):
     return changes
 
 
-def accuracy_table(changes, window="Common", scope="Combined"):
+def accuracy_table(changes, window="Available", scope="Combined"):
     """Display the before/after accuracy for each architecture, keeping the groups."""
     rows = changes.loc[
         changes["Window"].eq(window) & changes["Period"].eq("All") & changes["Scope"].eq(scope),
@@ -90,7 +90,7 @@ OUTPUT_MODEL_DIR = MODEL_DIR / "market_augmented"
 PREDICTION_PATH = REPORT_DIR / "league_tier_predictions.csv"
 
 
-def main():
+def main(evaluate_only=False):
     fields = pd.read_csv(MARKET_FIELD_PATH)
     all_features = fields.loc[fields["role"].eq("feature"), "field"].tolist()
     base_fields = pd.read_csv(FIELD_PATH)
@@ -121,7 +121,8 @@ def main():
         path = MODEL_DIR / f"{slug}.joblib"
         originals[name] = joblib.load(path)
         settings[name] = {"OriginalSHA256": hashlib.sha256(path.read_bytes()).hexdigest(), "Estimator": str(originals[name])}
-    (REPORT_DIR / "market_augmented_settings.json").write_text(json.dumps(settings, indent=2))
+    if not evaluate_only:
+        (REPORT_DIR / "market_augmented_settings.json").write_text(json.dumps(settings, indent=2))
     fit_records, prediction_sets, metric_sets = [], [], []
     with threadpool_limits(limits=2):
         for feature_set in FEATURE_SETS:
@@ -132,17 +133,21 @@ def main():
             folder.mkdir(exist_ok=True)
             for name in MODEL_NAMES:
                 started = time.perf_counter()
-                print(f"Fitting {name}: {feature_set}, {len(selected)} features...", flush=True)
-                model = fit_same_architecture(originals[name], train[selected], train["FTResult"])
                 slug = name.lower().replace(" ", "_")
-                joblib.dump(model, folder / f"{slug}.joblib", compress=3)
+                print(f"{'Evaluating' if evaluate_only else 'Fitting'} {name}: {feature_set}, {len(selected)} features...", flush=True)
+                if evaluate_only:
+                    model = joblib.load(folder / f"{slug}.joblib")
+                else:
+                    model = fit_same_architecture(originals[name], train[selected], train["FTResult"])
+                    joblib.dump(model, folder / f"{slug}.joblib", compress=3)
                 predicted, probabilities, _ = evaluate(model, test[selected], test["FTResult"])
                 variant[f"{slug}_prediction"] = predicted
                 for position, label in enumerate(LABELS):
                     variant[f"{slug}_probability_{label}"] = probabilities[:, position]
                 seconds = time.perf_counter() - started
                 fit_records.append({"FeatureSet": feature_set, "Model": name, "TrainingMatches": len(train), "Features": len(selected), "Seconds": seconds})
-                pd.DataFrame(fit_records).to_csv(REPORT_DIR / "market_augmented_training.csv", index=False)
+                if not evaluate_only:
+                    pd.DataFrame(fit_records).to_csv(REPORT_DIR / "market_augmented_training.csv", index=False)
                 print(f"Completed {name}: {feature_set} in {seconds:.1f}s.", flush=True)
             metrics = score_comparisons(variant, BENCHMARK)
             metrics["FeatureSet"] = feature_set
@@ -158,4 +163,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evaluate-only", action="store_true", help="Reuse fitted models and refresh test results.")
+    main(evaluate_only=parser.parse_args().evaluate_only)

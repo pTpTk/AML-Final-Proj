@@ -7,6 +7,7 @@ normalize the documented report renames and retired source-audit fields.
 """
 
 from pathlib import Path
+import argparse
 import hashlib
 import json
 import re
@@ -18,6 +19,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "reports" / "reproduction"
 REPORTS = ROOT / "reports"
+WINDOW = json.loads((REPORTS / "evaluation_window.json").read_text())
 execution = json.loads((OUT / "execution.json").read_text())
 BACKUP = Path(execution["BackupDirectory"])
 LABELS = np.array(["A", "D", "H"])
@@ -160,9 +162,9 @@ def verify_unified_report():
              "Logistic regression": "Logistic regression", "Boosting": "Histogram gradient boosting",
              "Odds favourite": "Supplied odds"}
     top = read("top_five_model_metrics.csv").query("Season == 'All'")
-    tier = read("league_tier_metrics.csv").query("Window == 'Common' and Period == 'All' and Scope == 'Tier'")
-    market = read("supplied_odds_metrics.csv").query("Window == 'Common' and Period == 'All' and Scope == 'Tier'")
-    changes = read("market_augmented_accuracy_changes.csv").query("Window == 'Common' and Period == 'All'")
+    tier = read("league_tier_metrics.csv").query("Window == 'Available' and Period == 'All' and Scope == 'Tier'")
+    market = read("supplied_odds_metrics.csv").query("Window == 'Available' and Period == 'All' and Scope == 'Tier'")
+    changes = read("market_augmented_accuracy_changes.csv").query("Window == 'Available' and Period == 'All'")
     cells = 0
     def number(value, expected, percent=False, tolerance=0.00005001):
         nonlocal cells
@@ -179,6 +181,15 @@ def verify_unified_report():
             for column in table.columns[2:]:
                 expected = float(selected.loc[selected.Model.eq(names[column]), "Accuracy"].iloc[0])
                 number(row[column], expected, percent=True)
+    coverage = read("league_tier_coverage.csv").query("Window == 'Available'")
+    table = tables["date_coverage"]
+    assert len(table) == len(coverage) == 15
+    for _, row in table.iterrows():
+        expected = coverage.loc[coverage.Division.eq(row.Division)].iloc[0]
+        number(row.Matches, int(expected.Matches), tolerance=0)
+        assert row.Tier == expected.Tier
+        assert row['First available match'] == expected.FirstMatch
+        assert row['Last available match'] == expected.LastMatch
     table = tables["odds_augmentation"]
     assert len(table) == 9
     for _, row in table.iterrows():
@@ -199,7 +210,7 @@ def verify_unified_report():
         number(row["Change (pp)"], selected.AccuracyChangePP, tolerance=0.00500001)
         number(row["Log loss without"], selected.LogLoss_NoOdds)
         number(row["Log loss with"], selected.LogLoss_WithOdds)
-    impact = read("external_data_impact_changes.csv").query("Window == 'Paired common' and Scope == 'Combined'")
+    impact = read("external_data_impact_changes.csv").query("Window == 'Paired full' and Scope == 'Combined'")
     table = tables["cleaning_sensitivity"]
     assert len(table) == 3
     for _, row in table.iterrows():
@@ -207,7 +218,7 @@ def verify_unified_report():
         number(row["Paired matches"], int(selected.Matches_Raw.iloc[0]), tolerance=0)
         for column, feature in [("Without odds (pp)", "No odds"), ("With odds (pp)", "With market odds")]:
             number(row[column], float(selected.loc[selected.FeatureSet.eq(feature), "AccuracyChangePP"].iloc[0]), tolerance=0.00500001)
-    check("Unified study document agrees with numerical exports", True, f"6 results tables; {cells} displayed values independently checked at their printed precision")
+    check("Unified study document agrees with numerical exports", True, f"7 results/coverage tables; {cells} displayed values independently checked at their printed precision")
 
 
 def verify_raw_audit(original, prepared, audit):
@@ -240,7 +251,7 @@ def verify_raw_audit(original, prepared, audit):
     source_odds = audit[["MarketHome", "MarketDraw", "MarketAway"]]
     source_valid = np.isfinite(source_odds).all(axis=1) & source_odds.gt(1).all(axis=1)
     masks = [raw_date.ne(source_date), raw_train.ne(source_train), raw_train & ~source_train,
-             source_train & ~raw_train, raw_date.between("2023-07-01", "2026-06-30").ne(source_date.between("2023-07-01", "2026-06-30")),
+             source_train & ~raw_train, raw_date.between(WINDOW["StartDate"], WINDOW["AsOf"]).ne(source_date.between(WINDOW["StartDate"], WINDOW["AsOf"])),
              original.FTResult.isin(LABELS) & audit.SourceResult.isin(LABELS) & original.FTResult.ne(audit.SourceResult),
              ~valid & source_valid, valid & ~source_valid, ~source_valid]
     exported = read("data_quality_external.csv")
@@ -251,7 +262,46 @@ def verify_raw_audit(original, prepared, audit):
           np.array_equal(prepared.FTResult.isna(), ~original.FTResult.isin(LABELS) | original.FTResult.ne(audit.SourceResult)))
 
 
-def main():
+def verify_evaluation_window():
+    """Independently ensure all eligible dates enter every primary league cohort."""
+    leagues = pd.read_csv(ROOT / "docs/league_strength_2023.csv")
+    divisions = leagues.loc[leagues.Tier.isin(["Top", "Mid", "Lower"]), "Division"]
+    keys = ["Division", "MatchDate", "HomeTeam", "AwayTeam"]
+    table = pd.read_csv(ROOT / "data/MatchesChronological.csv", parse_dates=["MatchDate"],
+                        usecols=[*keys, "FTResult", "MarketHome", "MarketDraw", "MarketAway"])
+    expected = table.loc[table.Division.isin(divisions) & table.FTResult.isin(LABELS)
+                         & table.MatchDate.between(WINDOW["StartDate"], WINDOW["AsOf"])]
+    predictions = read("league_tier_predictions.csv")
+    expected_keys = pd.MultiIndex.from_frame(expected[keys]).sort_values()
+    actual_keys = pd.MultiIndex.from_frame(predictions[keys]).sort_values()
+    check("All available league fixtures use the recorded July 2023–present window",
+          expected_keys.equals(actual_keys), f"{len(expected)} fixtures; {WINDOW['StartDate']}–{WINDOW['AsOf']}")
+    top = read("top_five_model_predictions.csv")
+    tier_top = predictions.loc[predictions.Tier.eq("Top")]
+    check("Big Five and Top tier use identical match identities",
+          pd.MultiIndex.from_frame(top[keys]).sort_values().equals(
+              pd.MultiIndex.from_frame(tier_top[keys]).sort_values()), len(top))
+    premier = read("model_predictions.csv")
+    premier_keys = keys[1:]
+    check("Premier League and tier evaluation use identical match identities",
+          pd.MultiIndex.from_frame(premier[premier_keys]).sort_values().equals(
+              pd.MultiIndex.from_frame(tier_top.loc[tier_top.Division.eq("E0"), premier_keys]).sort_values()))
+    valid = expected[["MarketHome", "MarketDraw", "MarketAway"]].gt(1).all(axis=1)
+    valid &= np.isfinite(expected[["MarketHome", "MarketDraw", "MarketAway"]]).all(axis=1)
+    market_keys = pd.MultiIndex.from_frame(expected.loc[valid, keys]).sort_values()
+    for name in ["supplied_odds_predictions.csv", "market_augmented_predictions.csv"]:
+        frame = read(name)
+        if "FeatureSet" in frame:
+            cohorts = frame.groupby("FeatureSet")
+        else:
+            cohorts = [("Base", frame)]
+        for feature, group in cohorts:
+            check(f"Full-window valid-odds cohort: {name} / {feature}",
+                  market_keys.equals(pd.MultiIndex.from_frame(group[keys]).sort_values()), len(group))
+    check("Available is the primary report window", WINDOW["PrimaryWindow"] == "Available")
+
+
+def main(compare_previous=False):
     assert execution.get("FinishedAtUTC"), "The numbered rerun has not completed."
     check("All numbered steps and existing tests completed", all(s["ExitCode"] == 0 for s in execution["Steps"]))
     unchanged = []
@@ -303,7 +353,8 @@ def main():
                             "RerunSHA256": hashlib.sha256(current_path.read_bytes()).hexdigest()})
     comparison = pd.DataFrame(comparisons)
     comparison.to_csv(OUT / "previous_output_comparison.csv", index=False)
-    check("All CSV results preserved after documented schema/name cleanup (elapsed seconds excluded)", comparison.MatchesPrevious.all(), len(comparison))
+    if compare_previous:
+        check("All CSV results preserved (elapsed seconds excluded)", comparison.MatchesPrevious.all(), len(comparison))
     model_comparisons = []
     for path in sorted((BACKUP / "models").rglob("*.joblib")):
         relative = path.relative_to(BACKUP)
@@ -313,6 +364,7 @@ def main():
                                   "ByteIdentical": before == after})
     pd.DataFrame(model_comparisons).to_csv(OUT / "model_artifact_comparison.csv", index=False)
     verify_unified_report()
+    verify_evaluation_window()
     for metric, prediction in [
         ("model_metrics.csv", "model_predictions.csv"),
         ("top_five_model_metrics.csv", "top_five_model_predictions.csv"),
@@ -338,7 +390,7 @@ def main():
             external[(scenario, feature, "Native full")] = frame
             external[(scenario, feature, "Native common")] = frame.loc[frame.MatchDate.le(end)]
         common = raw_variant.merge(source_variant[["RawRow"]], on="RawRow", validate="one_to_one")
-        for label, end in [("Paired common", settings["SourceCommonEnd"]), ("Paired full", "2026-06-30")]:
+        for label, end in [("Paired common", settings["SourceCommonEnd"]), ("Paired full", WINDOW["AsOf"])]:
             matched = common.loc[common.RawDate.between("2023-07-01", end)
                                  & common.SourceDate.between("2023-07-01", end)
                                  & common.FTResult.eq(common.SourceResult)]
@@ -433,12 +485,12 @@ def outline_comparison():
     for group in ["Top", "Mid", "Lower"]:
         for model in MODELS:
             record("Tier base models", group, model, "Accuracy", tier.loc[
-                tier.Tier.eq(group) & tier.Model.eq(model) & tier.Window.eq("Common")
+                tier.Tier.eq(group) & tier.Model.eq(model) & tier.Window.eq("Available")
                 & tier.Period.eq("All") & tier.Scope.eq("Tier")])
     for group in ["Top", "Mid", "Lower"]:
         for model in MODELS + ["Supplied odds"]:
             record("Tier market comparison", group, model, "Accuracy", market.loc[
-                market.Group.eq(group) & market.Model.eq(model) & market.Window.eq("Common")
+                market.Group.eq(group) & market.Model.eq(model) & market.Window.eq("Available")
                 & market.Period.eq("All") & market.Scope.eq("Tier")])
     for group in ["Top", "Mid", "Lower"]:
         for model in MODELS:
@@ -447,11 +499,13 @@ def outline_comparison():
                                             ("New model", model, "With market odds")]:
                 record("Tier odds augmentation", group, model, column, augmented.loc[
                     augmented.Group.eq(group) & augmented.Model.eq(choice) & augmented.FeatureSet.eq(feature)
-                    & augmented.Window.eq("Common") & augmented.Period.eq("All") & augmented.Scope.eq("Tier")])
+                    & augmented.Window.eq("Available") & augmented.Period.eq("All") & augmented.Scope.eq("Tier")])
     assert next(percentages, None) is None
     pd.DataFrame(rows).to_csv(OUT / "outline_number_comparison.csv", index=False)
     print(f"Outline: {sum(r['MatchesOutlineRounding'] for r in rows)} of {len(rows)} score cells match at one decimal percent.")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--compare-previous", action="store_true", help="Also require equality with historical outputs.")
+    main(compare_previous=parser.parse_args().compare_previous)

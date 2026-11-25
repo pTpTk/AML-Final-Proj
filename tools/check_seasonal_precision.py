@@ -1,19 +1,25 @@
 """Replay seasonal prediction batches and independently calculate reported log loss."""
 
 from pathlib import Path
+from importlib import import_module
+import json
+import sys
 import joblib
 import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
 root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+step_03 = import_module('03_train_models')
+window = json.loads((root / 'reports/evaluation_window.json').read_text())
 out = root / "reports" / "reproduction"
 features = pd.read_csv(root / "docs/match_prediction_fields.csv").query("role == 'feature'").field.tolist()
 selected = []
 for chunk in pd.read_csv(root / "data/MatchTraining.csv", parse_dates=["MatchDate"], chunksize=20000,
                          dtype={field: "float32" for field in features}):
-    selected.append(chunk.loc[chunk.Division.eq("E0") & chunk.MatchDate.ge("2023-07-01")
-                              & chunk.MatchDate.lt("2026-07-01") & chunk.FTResult.isin(["A", "D", "H"])])
+    selected.append(chunk.loc[chunk.Division.eq("E0") & step_03.evaluation_dates(chunk.MatchDate, as_of=window['AsOf'])
+                              & chunk.FTResult.isin(["A", "D", "H"])])
 test = pd.concat(selected)
 exported = pd.read_csv(root / "reports/model_predictions.csv")
 metrics = pd.read_csv(root / "reports/model_metrics.csv")
@@ -22,9 +28,9 @@ with threadpool_limits(limits=2):
     for model_name in metrics.Model.unique():
         slug = model_name.lower().replace(" ", "_")
         model = joblib.load(root / "models" / f"{slug}.joblib")
-        for start in [2023, 2024, 2025]:
-            season = f"{start}/{(start + 1) % 100:02d}"
-            frame = test.loc[test.MatchDate.ge(f"{start}-07-01") & test.MatchDate.lt(f"{start + 1}-07-01")]
+        seasons = step_03.season_labels(test.MatchDate)
+        for season in sorted(seasons.unique()):
+            frame = test.loc[seasons.eq(season)]
             order = [list(model.classes_).index(label) for label in ["A", "D", "H"]]
             p = model.predict_proba(frame[features])[:, order].astype(float)
             p /= p.sum(axis=1, keepdims=True)

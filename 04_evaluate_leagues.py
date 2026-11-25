@@ -1,6 +1,7 @@
 """Evaluate frozen classifiers on the top five leagues and all three league tiers."""
 
 from importlib import import_module
+import json
 
 from sklearn.metrics import accuracy_score, f1_score, log_loss, recall_score
 from threadpoolctl import threadpool_limits
@@ -21,7 +22,8 @@ CANDIDATES = _step_03.CANDIDATES
 DATA_PATH = _step_03.DATA_PATH
 FIELD_PATH = _step_03.FIELD_PATH
 MODEL_DIR = _step_03.MODEL_DIR
-TEST_END = _step_03.TEST_END
+TEST_AS_OF = _step_03.TEST_AS_OF
+evaluation_dates = _step_03.evaluation_dates
 TEST_START = _step_03.TEST_START
 TRAIN_START = _step_03.TRAIN_START
 evaluate = _step_03.evaluate
@@ -33,18 +35,15 @@ MODEL_NAMES = list(CANDIDATES)
 
 def select_matches(table, divisions, as_of=None):
     """Keep only requested leagues, known results, and the held-out date window."""
-    today = pd.Timestamp(as_of).normalize() if as_of is not None else pd.Timestamp.today().normalize()
     return table.loc[
         table["Division"].isin(divisions)
         & table["FTResult"].isin(LABELS)
-        & table["MatchDate"].ge(TEST_START)
-        & table["MatchDate"].lt(TEST_END)
-        & table["MatchDate"].le(today)
+        & evaluation_dates(table["MatchDate"], as_of)
     ]
 
 
 def common_end_date(matches, divisions):
-    """Stop the main comparison at the earliest last match among all 15 leagues."""
+    """Find the earlier overlap cutoff for secondary sensitivity scores only."""
     last_dates = matches.groupby("Division")["MatchDate"].max().reindex(divisions)
     if last_dates.isna().any():
         missing = last_dates.index[last_dates.isna()].tolist()
@@ -69,7 +68,7 @@ def summarize_predictions(predictions, common_end):
     """Score every model by league and tier, for matching dates and all available dates."""
     rows = []
     for window in ["Common", "Available"]:
-        # All available dates are secondary because some leagues end much earlier.
+        # Available is primary; Common is a secondary overlap-window sensitivity.
         matches = predictions if window == "Available" else predictions.loc[
             predictions["MatchDate"].le(common_end)
         ]
@@ -132,7 +131,7 @@ def coverage_table(matches, leagues, features, training_counts, common_end):
     return pd.DataFrame(rows).merge(leagues, on="Division", validate="many_to_one")
 
 
-def accuracy_comparison(metrics, window="Common"):
+def accuracy_comparison(metrics, window="Available"):
     """Return pooled tier accuracies with one column per frozen model."""
     selected = metrics.loc[
         metrics["Window"].eq(window) & metrics["Period"].eq("All") & metrics["Scope"].eq("Tier")
@@ -173,10 +172,14 @@ def main():
     metrics = summarize_predictions(predictions, common_end)
     coverage = coverage_table(matches, leagues, features, training_counts, common_end)
     REPORT_DIR.mkdir(exist_ok=True)
+    (REPORT_DIR / "evaluation_window.json").write_text(json.dumps({
+        "StartDate": str(TEST_START.date()), "AsOf": str(TEST_AS_OF.date()),
+        "PrimaryWindow": "Available", "CommonEnd": str(common_end.date()),
+    }, indent=2) + "\n")
     predictions.to_csv(REPORT_DIR / "league_tier_predictions.csv", index=False)
     metrics.to_csv(REPORT_DIR / "league_tier_metrics.csv", index=False)
     coverage.to_csv(REPORT_DIR / "league_tier_coverage.csv", index=False)
-    # The outline first compares each top league over the full three-season window.
+    # Big Five and tier summaries use the same July 2023–today prediction cohort.
     top = predictions.loc[predictions["Tier"].eq("Top")].copy()
     top["Season"] = season_labels(top["MatchDate"])
     top_rows = []
@@ -193,7 +196,7 @@ def main():
     top_metrics.to_csv(REPORT_DIR / "top_five_model_metrics.csv", index=False)
     top.to_csv(REPORT_DIR / "top_five_model_predictions.csv", index=False)
     print(accuracy_comparison(metrics).to_string())
-    print(f"Common end date: {common_end.date()}; saved top-five and tier exports.")
+    print(f"Evaluation: {TEST_START.date()}–{TEST_AS_OF.date()}; secondary overlap ends {common_end.date()}.")
 
 
 if __name__ == "__main__":
